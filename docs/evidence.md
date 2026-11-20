@@ -115,3 +115,141 @@ dso202-gitops-control-plane   127.0.0.1:30080->30080/tcp, 127.0.0.1:30090->30090
 ```
 
 The last line shows host port 30080 (dev frontend) and 30090 (dev backend API) mapped on the control-plane node.
+
+## Task 2
+
+### 2.1 Render checks, install, pods, CRDs, local settings, version
+```text
+$ kubectl kustomize bootstrap/argocd | grep -E '^kind: (Deployment|StatefulSet)$' | sort | uniq -c
+      6 kind: Deployment
+      1 kind: StatefulSet
+
+$ kubectl kustomize bootstrap/argocd | grep 'image:' | sort -u
+        image: ghcr.io/dexidp/dex:v2.45.1
+        image: public.ecr.aws/docker/library/redis:8.2.3-alpine
+        image: quay.io/argoproj/argocd:v3.5.6
+
+$ kubectl wait --for=condition=Available deployment --all -n argocd --timeout=300s
+deployment.apps/argocd-applicationset-controller condition met
+deployment.apps/argocd-dex-server condition met
+deployment.apps/argocd-notifications-controller condition met
+deployment.apps/argocd-redis condition met
+deployment.apps/argocd-repo-server condition met
+deployment.apps/argocd-server condition met
+
+$ kubectl rollout status statefulset/argocd-application-controller -n argocd --timeout=300s
+partitioned roll out complete: 1 new pods have been updated...
+
+$ kubectl get pods -n argocd
+NAME                                                READY   STATUS    RESTARTS   AGE
+argocd-application-controller-0                     1/1     Running   0          38s
+argocd-applicationset-controller-58bb5c7479-kx2r2   1/1     Running   0          48s
+argocd-dex-server-dd6b85d9c-9n8rl                   1/1     Running   0          48s
+argocd-notifications-controller-6b85c65458-t6s4q    1/1     Running   0          48s
+argocd-redis-869b85489d-kngpg                       1/1     Running   0          48s
+argocd-repo-server-5bf66565cd-25rlv                 1/1     Running   0          48s
+argocd-server-7474bb8f76-8wrxf                      1/1     Running   0          48s
+
+$ kubectl get crd | grep argoproj.io
+applications.argoproj.io      2026-11-20T14:51:17Z
+applicationsets.argoproj.io   2026-11-20T14:51:17Z
+appprojects.argoproj.io       2026-11-20T14:51:18Z
+
+$ kubectl get configmap argocd-cm -n argocd -o yaml | grep -E 'timeout.reconciliation|accounts.reviewer'
+  accounts.reviewer: login
+  timeout.reconciliation: 60s
+  timeout.reconciliation.jitter: 10s
+
+$ argocd admin initial-password -n argocd
+<password printed - not recorded>
+
+$ argocd login localhost:8080 --username admin --insecure
+'admin:login' logged in successfully
+
+$ argocd version
+argocd: v3.5.6+c2b1e30
+  BuildDate: 2026-10-20T19:01:52Z
+  GitCommit: c2b1e3017e2cec86b122172e861dcd026453ae44
+  GitTreeState: clean
+  GoVersion: go1.26.10
+  Compiler: gc
+  Platform: linux/amd64
+argocd-server: v3.5.6
+  BuildDate: 2026-10-20T18:33:20Z
+  GitCommit: c2b1e3017e2cec86b122172e861dcd026453ae44
+  GitTreeState: clean
+  GitTag: v3.5.6
+  GoVersion: go1.26.10
+  Compiler: gc
+  Platform: linux/amd64
+  Kustomize Version: v5.8.1 2026-02-09T16:15:27Z
+  Helm Version: v4.2.1+gd591a19
+  Kubectl Version: v0.36.1
+  Jsonnet Version: v0.22.0
+
+```
+
+### 2.2 Screenshot
+
+![Argo CD UI after sign-in](images/task2-argocd-ui.png)
+
+## Task 3
+
+### 3.1 Whitelist compared with the chart
+Rendered kinds (Task 1, 1.3): `Deployment` x2, `Service` x3, `StatefulSet` x1, plus the PostSync `Job` (Task 5).
+Final `namespaceResourceWhitelist` in `argocd/projects/dso202.yaml`: `apps/Deployment`, `apps/StatefulSet`, `""/Service`, `batch/Job`.
+Change from Listing 8: `ConfigMap` and `ServiceAccount` **removed** (the chart renders neither; a wider whitelist than needed is unused privilege). Nothing added. `Namespace`, `ResourceQuota`, `LimitRange`, `Role`, `RoleBinding`, `SealedSecret` are absent, as required.
+
+### 3.2 Bootstrap and result
+```text
+$ kubectl apply -f bootstrap/root
+appproject.argoproj.io/platform unchanged
+application.argoproj.io/root unchanged
+
+$ kubectl get appproject,application -n argocd
+NAME                              AGE
+appproject.argoproj.io/default    62s
+appproject.argoproj.io/dso202     10s
+appproject.argoproj.io/platform   15s
+
+NAME                           SYNC STATUS   HEALTH STATUS
+application.argoproj.io/root   Synced        Healthy
+
+$ argocd app get root
+Name:               argocd/root
+Project:            platform
+Server:             https://kubernetes.default.svc
+Namespace:          argocd
+URL:                https://localhost:8080/applications/root
+Source:
+- Repo:             https://github.com/Khemraj9815/dso202-gitops.git
+  Target:           main
+  Path:             argocd
+SyncWindow:         Sync Allowed
+Sync Policy:        Automated (Prune)
+Sync Status:        Synced to main (e2cfff4)
+Health Status:      Healthy
+
+GROUP        KIND        NAMESPACE  NAME    STATUS  HEALTH  HOOK  MESSAGE
+argoproj.io  AppProject  argocd     dso202  Synced                appproject.argoproj.io/dso202 unchanged
+
+$ argocd proj get dso202
+Name:                        dso202
+Description:                 Task Tracker workloads for the dev and staging environments
+Destinations:                https://kubernetes.default.svc,dso202-dev
+                             https://kubernetes.default.svc,dso202-staging
+Repositories:                https://github.com/Khemraj9815/dso202-gitops.git
+Source Namespaces:           <none>
+Scoped Repositories:         <none>
+Allowed Cluster Resources:   <none>
+Scoped Clusters:             <none>
+Denied Namespaced Resources: <none>
+Signature keys:              <none>
+Orphaned Resources:          disabled
+
+```
+`dso202` appears in the resource list of `root`: it was created by the root Application, not by hand.
+
+### 3.3 Screenshot
+
+![root Application resource tree](images/task3-root-tree.png)

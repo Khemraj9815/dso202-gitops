@@ -90,7 +90,9 @@ _Completed in Task 4._
 ## Answers
 
 ### Q1 (Task 3)
-_To be written._
+**Why `platform` is applied by hand but `dso202` comes from the root.** The root Application must belong to a project, and that project must exist before the root can be created: Argo CD cannot deliver the project that authorises its own delivery. `platform` is therefore part of the hand-applied bootstrap (with the root itself), and it is the only project allowed to target the `argocd` namespace, which is where Application and AppProject objects live. Once the root exists, every *other* Argo CD object is ordinary desired state: `dso202` is a file in `argocd/projects/`, so it is versioned, reviewed through Git and recreated automatically on a rebuild, which is shown by `dso202` appearing in the resource list of `argocd app get root` (evidence, Task 3).
+
+**Risk if `dso202` could deploy into `argocd`.** Applications and AppProjects are just objects in the `argocd` namespace. A workload Application allowed to write there could commit an Application that names `project: platform`, or edit the `dso202` AppProject itself, and so escape its own whitelist: create Namespaces, ClusterRoles, quotas, or anything else cluster-wide. Write access to the `argocd` namespace is effectively Argo CD administrator access, so a mistaken or malicious commit to the chart would no longer be contained by the project boundary (least privilege would be lost).
 
 ### Q2 (Task 4)
 _To be written._
