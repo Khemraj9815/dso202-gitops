@@ -1,0 +1,43 @@
+{{- /*
+=============================================================================
+File        : charts/tasktracker/templates/frontend-deployment.yaml
+Assignment  : DSO202 Assignment 4
+Descriptor  : Unit I 1.2 - Deployments; Unit IV 4.3.2 (waves), 4.3.3 (health)
+Purpose     : Frontend (nginx serving the static site). Sync wave 2, the last
+              workload wave. Its page header shows the release in image 1.1.
+=============================================================================
+*/}}
+{{- $c := dict "root" . "component" "frontend" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-frontend
+  labels:
+    {{- include "tasktracker.labels" . | nindent 4 }}
+    {{- include "tasktracker.selector" $c | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.frontend.syncWave | quote }}   # C5
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  progressDeadlineSeconds: {{ .Values.frontend.progressDeadlineSeconds }}   # C6
+  selector:
+    matchLabels:
+      {{- include "tasktracker.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tasktracker.selector" $c | nindent 8 }}
+    spec:
+      containers:
+        - name: frontend
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"   # C1
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.frontend.port }}
+          env:                                                            # C2 / C3
+            {{- include "tasktracker.env" (dict "root" . "tier" .Values.frontend) | trim | nindent 12 }}
+          readinessProbe:                                                 # C4
+            {{- toYaml .Values.frontend.readinessProbe | nindent 12 }}
+          resources:                                                      # C7
+            {{- toYaml .Values.frontend.resources | nindent 12 }}

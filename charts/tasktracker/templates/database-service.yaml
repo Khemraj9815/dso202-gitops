@@ -1,0 +1,26 @@
+{{- /*
+=============================================================================
+File        : charts/tasktracker/templates/database-service.yaml
+Assignment  : DSO202 Assignment 4
+Descriptor  : Unit I 1.4 - Services
+Purpose     : ClusterIP Service for the database. Internal only; the backend
+              reaches it through backend.env.DB_HOST.
+=============================================================================
+*/}}
+{{- $c := dict "root" . "component" "database" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-database
+  labels:
+    {{- include "tasktracker.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.database.syncWave | quote }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "tasktracker.selector" $c | nindent 4 }}
+  ports:
+    - name: db
+      port: {{ .Values.database.port }}
+      targetPort: db

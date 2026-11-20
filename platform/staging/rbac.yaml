@@ -1,0 +1,42 @@
+# =============================================================================
+# File        : platform/staging/rbac.yaml
+# Assignment  : DSO202 Assignment 4
+# Descriptor  : Unit II 2.3 - Kubernetes RBAC (Role and RoleBinding)
+# Purpose     : Read-only access for the dso202-developers group in dso202-staging:
+#               view workloads and logs, change nothing. Kubernetes RBAC governs
+#               kubectl access to the cluster; Argo CD RBAC (Task 6) is separate.
+#               Delivered by the platform layer, never by the chart (C8).
+# =============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tasktracker-viewer
+  namespace: dso202-staging
+  labels:
+    dso202/environment: staging
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "events", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tasktracker-viewer-binding
+  namespace: dso202-staging
+  labels:
+    dso202/environment: staging
+subjects:
+  - kind: Group
+    name: dso202-developers
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: tasktracker-viewer
+  apiGroup: rbac.authorization.k8s.io

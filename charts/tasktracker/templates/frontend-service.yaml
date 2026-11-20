@@ -1,0 +1,30 @@
+{{- /*
+=============================================================================
+File        : charts/tasktracker/templates/frontend-service.yaml
+Assignment  : DSO202 Assignment 4
+Descriptor  : Unit I 1.4 - Services (NodePort)
+Purpose     : Frontend Service. NodePort with the port number as a value (C10):
+              30080 in dev (mapped to the host by kind), 30081 in staging
+              (not mapped; reached with kubectl port-forward).
+=============================================================================
+*/}}
+{{- $c := dict "root" . "component" "frontend" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-frontend
+  labels:
+    {{- include "tasktracker.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.frontend.syncWave | quote }}
+spec:
+  type: {{ .Values.frontend.service.type }}                 # C10
+  selector:
+    {{- include "tasktracker.selector" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.frontend.service.port }}
+      targetPort: http
+      {{- if eq .Values.frontend.service.type "NodePort" }}
+      nodePort: {{ .Values.frontend.service.nodePort }}     # C10
+      {{- end }}

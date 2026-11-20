@@ -1,0 +1,29 @@
+# =============================================================================
+# File        : environments/staging/values.yaml
+# Assignment  : DSO202 Assignment 4
+# Descriptor  : Unit III 3.2 - Helm values; Unit IV 4.3.1 (per-environment config)
+# Purpose     : Everything that differs in staging, and nothing else. Read by
+#               argocd/applications/tasktracker-staging.yaml from a Git TAG, so
+#               an edit here reaches staging only after a new tag is promoted.
+# =============================================================================
+existingSecret: tasktracker-credentials    # C3 - created from the staging SealedSecret
+
+database:
+  image:
+    tag: "1.0"
+
+backend:
+  replicaCount: 1
+  image:
+    tag: "1.0"
+  # ClusterIP (chart default). Reached from the browser with:
+  #   kubectl port-forward -n dso202-staging svc/tasktracker-backend 8091:8080
+
+frontend:
+  replicaCount: 1
+  image:
+    tag: "1.0"
+  env:
+    BACKEND_URL: http://localhost:8091
+  service:
+    nodePort: 30081                        # C10 - not mapped; use port-forward 8081:80

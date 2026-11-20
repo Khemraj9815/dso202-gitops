@@ -1,0 +1,65 @@
+{{- /*
+=============================================================================
+File        : charts/tasktracker/templates/database-statefulset.yaml
+Assignment  : DSO202 Assignment 4
+Descriptor  : Unit II 2.1 - StatefulSets; Unit IV 4.3.2 - sync waves
+Purpose     : PostgreSQL database with a persistent volume. Sync wave 0, so
+              Argo CD waits for it to be Healthy before the backend (wave 1).
+=============================================================================
+*/}}
+{{- $c := dict "root" . "component" "database" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-database
+  labels:
+    {{- include "tasktracker.labels" . | nindent 4 }}
+    {{- include "tasktracker.selector" $c | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.database.syncWave | quote }}   # C5
+spec:
+  serviceName: {{ .Release.Name }}-database
+  replicas: 1
+  # RollingUpdate, not OnDelete: Argo CD does not report an OnDelete
+  # StatefulSet as Healthy (section 13).
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "tasktracker.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tasktracker.selector" $c | nindent 8 }}
+    spec:
+      containers:
+        - name: database
+          image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"   # C1
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: db
+              containerPort: {{ .Values.database.port }}
+          env:                                                                # C2 / C3
+            {{- include "tasktracker.env" (dict "root" . "tier" .Values.database) | trim | nindent 12 }}
+            # A subdirectory of the mount: a fresh volume may contain
+            # lost+found, which initdb refuses to initialise over.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:                                                     # C4
+            {{- toYaml .Values.database.readinessProbe | nindent 12 }}
+          resources:                                                          # C7
+            {{- toYaml .Values.database.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  # PVCs from volumeClaimTemplates are created by the StatefulSet controller,
+  # not by Argo CD, so they are not in the project whitelist and survive
+  # deletion of the Application.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.database.storage }}

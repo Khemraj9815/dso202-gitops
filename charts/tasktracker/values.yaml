@@ -1,0 +1,113 @@
+# =============================================================================
+# File        : charts/tasktracker/values.yaml
+# Assignment  : DSO202 Assignment 4
+# Descriptor  : Unit III 3.2 - Helm values; Unit IV 4.3 (chart contract C1-C11)
+# Purpose     : Defaults shared by every environment. environments/<env>/values.yaml
+#               overrides ONLY what differs (tags, replicas, ports, BACKEND_URL).
+#               The C-numbers in the comments refer to the chart contract (Task 1).
+# =============================================================================
+
+# C3 - Name of an EXISTING Secret. It is created in the namespace by the Sealed
+#      Secrets controller from platform/<env>/tasktracker-credentials.sealed.yaml.
+#      The chart never renders a Secret itself.
+existingSecret: tasktracker-credentials
+
+# Never 'Always': images may be side-loaded with 'kind load' (section 13).
+imagePullPolicy: IfNotPresent
+
+# -----------------------------------------------------------------------------
+# Database tier (PostgreSQL 17, tutor-issued image)
+# -----------------------------------------------------------------------------
+database:
+  image:                                   # C1 - repository and tag are values
+    repository: rynorbu11/dso202-db
+    tag: "1.0"
+  port: 5432
+  syncWave: "0"                            # C5 - first wave
+  storage: 1Gi
+  # C2 - plain variables, as a MAP (Helm merges maps across values files, but
+  #      replaces lists, so an environment can add one key without repeating
+  #      the others).
+  env:
+    POSTGRES_DB: tasktracker
+  # C3 - variable name -> key in existingSecret.
+  secretEnv:
+    POSTGRES_USER: POSTGRES_USER
+    POSTGRES_PASSWORD: POSTGRES_PASSWORD
+  readinessProbe:                          # C4 - ready only when Postgres accepts connections
+    exec:
+      command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  resources:                               # C7 - required by the namespace ResourceQuota
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+# -----------------------------------------------------------------------------
+# Backend tier (Node.js API; listens on APP_PORT, default 8080)
+# -----------------------------------------------------------------------------
+backend:
+  replicaCount: 1
+  image:                                   # C1
+    repository: rynorbu11/dso202-backend
+    tag: "1.0"
+  port: 8080
+  syncWave: "1"                            # C5 - after the database
+  progressDeadlineSeconds: 120             # C6 - Degraded after 2 min, not 10
+  env:                                     # C2 - add a variable here; no template change
+    DB_HOST: tasktracker-database
+    DB_PORT: "5432"
+    DB_NAME: tasktracker                   # must equal database.env.POSTGRES_DB
+  secretEnv:                               # C3
+    DB_USER: DB_USER
+    DB_PASSWORD: DB_PASSWORD
+  # The browser calls the backend directly (see frontend.env.BACKEND_URL), so
+  # the Service type is a value: NodePort in dev (30090, mapped by kind),
+  # ClusterIP in staging (reached with kubectl port-forward).
+  service:
+    type: ClusterIP
+    nodePort: null
+  readinessProbe:                          # C4 - /api/status runs 'SELECT 1' on the DB
+    httpGet:
+      path: /api/status
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  resources:                               # C7
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+# -----------------------------------------------------------------------------
+# Frontend tier (static site on nginx; listens on 8080 as a non-root user)
+# -----------------------------------------------------------------------------
+frontend:
+  replicaCount: 1
+  image:                                   # C1
+    repository: rynorbu11/dso202-frontend
+    tag: "1.0"
+  port: 8080
+  syncWave: "2"                            # C5 - after the backend
+  progressDeadlineSeconds: 120             # C6
+  env:                                     # C2
+    # Baked into config.js at container start and used by the BROWSER, so it
+    # must be an address reachable from the laptop. Set per environment.
+    BACKEND_URL: http://localhost:8080
+  secretEnv: {}
+  service:
+    type: NodePort                         # C10
+    port: 80
+    nodePort: 30080                        # C10 - 30080 dev, 30081 staging
+  readinessProbe:                          # C4
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 3
+    periodSeconds: 5
+  resources:                               # C7
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 250m, memory: 128Mi }
+
+# C9 - No ingress controller is installed in this assignment.
+ingress:
+  enabled: false
+  host: tasktracker.local

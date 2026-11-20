@@ -1,0 +1,46 @@
+{{- /*
+=============================================================================
+File        : charts/tasktracker/templates/backend-deployment.yaml
+Assignment  : DSO202 Assignment 4
+Descriptor  : Unit I 1.2 - Deployments; Unit IV 4.3.2 (waves), 4.3.3 (health)
+Purpose     : Backend API. Sync wave 1 (after the database). A rollout that
+              does not progress within progressDeadlineSeconds makes the
+              Deployment, and so the Application, report Degraded (Task 7).
+=============================================================================
+*/}}
+{{- $c := dict "root" . "component" "backend" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-backend
+  labels:
+    {{- include "tasktracker.labels" . | nindent 4 }}
+    {{- include "tasktracker.selector" $c | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.backend.syncWave | quote }}   # C5
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  progressDeadlineSeconds: {{ .Values.backend.progressDeadlineSeconds }}   # C6
+  selector:
+    matchLabels:
+      {{- include "tasktracker.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tasktracker.selector" $c | nindent 8 }}
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"   # C1
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.port }}
+          env:                                                            # C2 / C3
+            - name: APP_PORT
+              value: {{ .Values.backend.port | quote }}
+            {{- include "tasktracker.env" (dict "root" . "tier" .Values.backend) | trim | nindent 12 }}
+          readinessProbe:                                                 # C4
+            {{- toYaml .Values.backend.readinessProbe | nindent 12 }}
+          resources:                                                      # C7
+            {{- toYaml .Values.backend.resources | nindent 12 }}

@@ -1,0 +1,31 @@
+{{- /*
+=============================================================================
+File        : charts/tasktracker/templates/backend-service.yaml
+Assignment  : DSO202 Assignment 4
+Descriptor  : Unit I 1.4 - Services
+Purpose     : Backend API Service. Used in-cluster by the smoke test, and by
+              the browser (the frontend's JavaScript calls BACKEND_URL
+              directly). The type is a value: NodePort in dev, ClusterIP in
+              staging, where it is reached with kubectl port-forward.
+=============================================================================
+*/}}
+{{- $c := dict "root" . "component" "backend" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-backend
+  labels:
+    {{- include "tasktracker.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.backend.syncWave | quote }}
+spec:
+  type: {{ .Values.backend.service.type }}
+  selector:
+    {{- include "tasktracker.selector" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+      targetPort: http
+      {{- if and (eq .Values.backend.service.type "NodePort") .Values.backend.service.nodePort }}
+      nodePort: {{ .Values.backend.service.nodePort }}
+      {{- end }}

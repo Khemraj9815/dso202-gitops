@@ -1,0 +1,43 @@
+# =============================================================================
+# File        : platform/dev/quota-and-limits.yaml
+# Assignment  : DSO202 Assignment 4
+# Descriptor  : Unit I 1.5.3 - ResourceQuota and LimitRange (from Assignment 2)
+# Purpose     : Caps what the dev namespace may consume. Delivered by the
+#               platform-dev Application (platform project), NOT by the chart,
+#               so the workload project cannot loosen its own limits (C8).
+# Note        : Because requests and limits are quota'd, every container,
+#               including the smoke-test hook Job, must declare them (C7).
+# =============================================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: app-resource-quota
+  namespace: dso202-dev
+  labels:
+    dso202/environment: dev
+spec:
+  hard:
+    requests.cpu: "2"          # total CPU requests across all three tiers
+    requests.memory: "2Gi"     # total memory requests across all three tiers
+    limits.cpu: "4"            # total CPU limits (limits may be over-committed)
+    limits.memory: "4Gi"       # total memory limits
+    pods: "8"                  # 3 tiers + rollout surge Pods + smoke-test Job
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: app-limit-range
+  namespace: dso202-dev
+  labels:
+    dso202/environment: dev
+spec:
+  limits:
+    - type: Container
+      # Applied as limits when a container declares none.
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      # Applied as requests when a container declares none.
+      defaultRequest:
+        cpu: "250m"
+        memory: "256Mi"
