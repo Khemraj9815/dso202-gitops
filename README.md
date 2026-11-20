@@ -85,7 +85,11 @@ The sealing-key backup in `../dso202-keys/` is kept: without it, every SealedSec
 
 ## Credential handling
 
-_Completed in Task 4._
+- The database credentials (`DB_USER`, `DB_PASSWORD`, `POSTGRES_USER`, `POSTGRES_PASSWORD`) exist in Git **only** as `SealedSecret`s: `platform/dev/tasktracker-credentials.sealed.yaml` and `platform/staging/tasktracker-credentials.sealed.yaml`. Dev and staging use different passwords and are sealed separately.
+- They are encrypted with `kubeseal` against the public key of this cluster's Sealed Secrets controller. The plaintext input was typed into `secrets-plain/<env>.env` in an editor (never on the command line), piped through `kubectl create secret --dry-run=client | kubeseal` so the plaintext Secret never reached disk, and deleted after sealing; the values are kept in a password manager.
+- The controller (installed by `argocd/applications/sealed-secrets.yaml`) decrypts each SealedSecret into the Secret `tasktracker-credentials`, which the chart reads through `existingSecret` (it never renders a Secret itself).
+- The controller's private sealing key is backed up **outside** the repository at `../dso202-keys/sealing-key.backup.yaml` (mode 600) and restored before the controller starts on a rebuild (Task 9).
+- `.gitignore` excludes key material and plaintext inputs, but the proof is the history search in `docs/evidence.md` (Task 4): no credential value, plain or base64, appears in any commit.
 
 ## Answers
 
@@ -95,7 +99,9 @@ _Completed in Task 4._
 **Risk if `dso202` could deploy into `argocd`.** Applications and AppProjects are just objects in the `argocd` namespace. A workload Application allowed to write there could commit an Application that names `project: platform`, or edit the `dso202` AppProject itself, and so escape its own whitelist: create Namespaces, ClusterRoles, quotas, or anything else cluster-wide. Write access to the `argocd` namespace is effectively Argo CD administrator access, so a mistaken or malicious commit to the chart would no longer be contained by the project boundary (least privilege would be lost).
 
 ### Q2 (Task 4)
-_To be written._
+**What strict scope prevents.** With the default *strict* scope, the SealedSecret's name and namespace are mixed into the encryption, so the ciphertext decrypts only as `tasktracker-credentials` in the namespace it was sealed for. Someone who can create objects in another namespace cannot copy the committed file there (or rename it) to make the controller decrypt the dev password into a Secret they can read; this is also why dev and staging are sealed separately and a dev file is useless in `dso202-staging`.
+
+**If the sealing key is lost.** Every SealedSecret in the repository becomes permanent ciphertext: nobody, including the owner, can decrypt it, and a new cluster's controller generates a different key, so the platform Applications report `Degraded` with `no key could decrypt secret`. The Secrets already running in a live cluster still work, but nothing can be rebuilt from Git. Recovery: take the plaintext values from the password manager (or, if they are lost too, rotate the credentials, which for an initialised database also means changing the password inside Postgres), seal them again against the new controller's public key, commit the new SealedSecrets, and immediately back up the new key outside the repository. Because the controller also renews its key every 30 days, the backup must be repeated after each renewal and after every rebuild.
 
 ### Q3 (Task 5)
 _To be written._
