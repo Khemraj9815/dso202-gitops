@@ -253,3 +253,169 @@ Orphaned Resources:          disabled
 ### 3.3 Screenshot
 
 ![root Application resource tree](images/task3-root-tree.png)
+
+## Task 4
+
+### 4.1 Controller installed from Git (step 1)
+```text
+$ kubectl get applications -n argocd
+NAME             SYNC STATUS   HEALTH STATUS
+root             Synced        Healthy
+sealed-secrets   Synced        Healthy
+
+$ kubectl get pods -n sealed-secrets
+NAME                                        READY   STATUS    RESTARTS   AGE
+sealed-secrets-controller-8b5ffdf69-fcdnq   1/1     Running   0          13s
+
+$ kubectl get crd sealedsecrets.bitnami.com
+NAME                        CREATED AT
+sealedsecrets.bitnami.com   2026-11-20T16:39:50Z
+
+```
+
+### 4.2 Sealing-key backup (step 2) - existence and permissions only
+```text
+$ ls -l ../dso202-keys/
+total 8
+-rw------- 1 khemrajghalley khemrajghalley 7088 Nov 20 22:40 sealing-key.backup.yaml
+
+$ grep -c 'tls.key' ../dso202-keys/sealing-key.backup.yaml
+1
+
+```
+The backup is outside the repository, mode 600, and taken before anything was sealed. Its contents are never shown.
+
+### 4.3 Sealing (steps 3-4)
+Plaintext inputs `secrets-plain/dev.env` and `secrets-plain/staging.env` were written in an editor (mode 600, ignored by Git), checked for matching `DB_*`/`POSTGRES_*` values and for different dev/staging passwords, then sealed per namespace:
+```bash
+export SEALED_SECRETS_CONTROLLER_NAMESPACE=sealed-secrets
+kubectl create secret generic tasktracker-credentials --namespace dso202-dev \
+  --from-env-file=secrets-plain/dev.env --dry-run=client -o yaml \
+  | kubeseal --format yaml > platform/dev/tasktracker-credentials.sealed.yaml
+# repeated with dso202-staging / secrets-plain/staging.env / platform/staging/...
+```
+
+### 4.4 Platform layer delivered (step 6)
+```text
+$ kubectl get applications -n argocd
+NAME               SYNC STATUS   HEALTH STATUS
+platform-dev       Synced        Healthy
+platform-staging   Synced        Healthy
+root               Synced        Healthy
+sealed-secrets     Synced        Healthy
+
+$ kubectl get namespaces | grep dso202
+dso202-dev           Active   8h
+dso202-staging       Active   8h
+
+$ kubectl get sealedsecret -n dso202-dev
+NAME                      STATUS   SYNCED   AGE
+tasktracker-credentials            True     8h
+
+$ kubectl describe secret tasktracker-credentials -n dso202-dev
+Name:         tasktracker-credentials
+Namespace:    dso202-dev
+Labels:       <none>
+Annotations:  <none>
+
+Type:  Opaque
+
+Data
+====
+DB_PASSWORD:        6 bytes
+DB_USER:            6 bytes
+POSTGRES_PASSWORD:  6 bytes
+POSTGRES_USER:      6 bytes
+
+$ kubectl get resourcequota,limitrange,role,rolebinding -n dso202-dev
+NAME                               REQUEST                                                LIMIT                                   AGE
+resourcequota/app-resource-quota   pods: 0/8, requests.cpu: 0/2, requests.memory: 0/2Gi   limits.cpu: 0/4, limits.memory: 0/4Gi   8h
+
+NAME                         CREATED AT
+limitrange/app-limit-range   2026-11-20T16:56:19Z
+
+NAME                                                CREATED AT
+role.rbac.authorization.k8s.io/tasktracker-viewer   2026-11-20T16:56:19Z
+
+NAME                                                               ROLE                      AGE
+rolebinding.rbac.authorization.k8s.io/tasktracker-viewer-binding   Role/tasktracker-viewer   8h
+
+$ kubectl get sealedsecret -n dso202-staging
+NAME                      STATUS   SYNCED   AGE
+tasktracker-credentials            True     8h
+
+$ kubectl describe secret tasktracker-credentials -n dso202-staging
+Name:         tasktracker-credentials
+Namespace:    dso202-staging
+Labels:       <none>
+Annotations:  <none>
+
+Type:  Opaque
+
+Data
+====
+DB_PASSWORD:        9 bytes
+DB_USER:            9 bytes
+POSTGRES_PASSWORD:  9 bytes
+POSTGRES_USER:      9 bytes
+
+$ kubectl get resourcequota,limitrange,role,rolebinding -n dso202-staging
+NAME                               REQUEST                                                LIMIT                                   AGE
+resourcequota/app-resource-quota   pods: 0/8, requests.cpu: 0/2, requests.memory: 0/2Gi   limits.cpu: 0/4, limits.memory: 0/4Gi   8h
+
+NAME                         CREATED AT
+limitrange/app-limit-range   2026-11-20T16:56:20Z
+
+NAME                                                CREATED AT
+role.rbac.authorization.k8s.io/tasktracker-viewer   2026-11-20T16:56:20Z
+
+NAME                                                               ROLE                      AGE
+rolebinding.rbac.authorization.k8s.io/tasktracker-viewer-binding   Role/tasktracker-viewer   8h
+
+$ argocd app get platform-dev
+{"level":"fatal","msg":"Failed to establish connection to localhost:8080: error dial proxy: dial tcp 127.0.0.1:8080: connect: connection refused","time":"2026-11-21T07:50:47+06:00"}
+
+```
+Both `platform-*` Applications are `Synced` and `Healthy`; `tasktracker-credentials` exists in both namespaces with the four keys (sizes only, never values), created by the controller from the SealedSecret.
+
+### 4.5 No plaintext in Git history (step 7)
+Keys tested, in both environments, each in plain **and** base64 form: `DB_USER`, `DB_PASSWORD`, `POSTGRES_USER`, `POSTGRES_PASSWORD` (16 searches). Values are not recorded.
+```text
+$ git log -p --all -S'<dev DB_USER, plain>' | head
+(no output)
+$ git log -p --all -S'<dev DB_USER, base64>' | head
+(no output)
+$ git log -p --all -S'<dev DB_PASSWORD, plain>' | head
+(no output)
+$ git log -p --all -S'<dev DB_PASSWORD, base64>' | head
+(no output)
+$ git log -p --all -S'<dev POSTGRES_USER, plain>' | head
+(no output)
+$ git log -p --all -S'<dev POSTGRES_USER, base64>' | head
+(no output)
+$ git log -p --all -S'<dev POSTGRES_PASSWORD, plain>' | head
+(no output)
+$ git log -p --all -S'<dev POSTGRES_PASSWORD, base64>' | head
+(no output)
+$ git log -p --all -S'<staging DB_USER, plain>' | head
+(no output)
+$ git log -p --all -S'<staging DB_USER, base64>' | head
+(no output)
+$ git log -p --all -S'<staging DB_PASSWORD, plain>' | head
+(no output)
+$ git log -p --all -S'<staging DB_PASSWORD, base64>' | head
+(no output)
+$ git log -p --all -S'<staging POSTGRES_USER, plain>' | head
+(no output)
+$ git log -p --all -S'<staging POSTGRES_USER, base64>' | head
+(no output)
+$ git log -p --all -S'<staging POSTGRES_PASSWORD, plain>' | head
+(no output)
+$ git log -p --all -S'<staging POSTGRES_PASSWORD, base64>' | head
+(no output)
+
+$ git status --short --ignored
+ M docs/evidence.md
+!! secrets-plain/
+```
+Every search printed nothing. The only ignored path is `secrets-plain/`.
