@@ -104,7 +104,14 @@ The sealing-key backup in `../dso202-keys/` is kept: without it, every SealedSec
 **If the sealing key is lost.** Every SealedSecret in the repository becomes permanent ciphertext: nobody, including the owner, can decrypt it, and a new cluster's controller generates a different key, so the platform Applications report `Degraded` with `no key could decrypt secret`. The Secrets already running in a live cluster still work, but nothing can be rebuilt from Git. Recovery: take the plaintext values from the password manager (or, if they are lost too, rotate the credentials, which for an initialised database also means changing the password inside Postgres), seal them again against the new controller's public key, commit the new SealedSecrets, and immediately back up the new key outside the repository. Because the controller also renews its key every 30 days, the backup must be repeated after each renewal and after every rebuild.
 
 ### Q3 (Task 5)
-_To be written._
+**Difference.** *Synced* is a comparison: the live objects equal what Git renders for the target revision. *Healthy* is an assessment of whether those objects actually work (a Deployment has its replicas available, a StatefulSet has finished rolling, a Job succeeded). They are independent: Argo CD can apply exactly what Git says (Synced) while the result is still starting, or broken (Progressing/Degraded); and a working system can drift from Git (Healthy but OutOfSync).
+
+**Example from this task** (`docs/evidence.md`, 5.2, `kubectl get applications -n argocd -w`):
+```text
+08:23:04 tasktracker-dev       Synced        Progressing
+08:23:09 tasktracker-dev       Synced        Healthy
+```
+At 08:23:04 every manifest had been applied (Synced), but the frontend Pod created in wave 2 was not yet ready (`tasktracker-frontend ... 0/1 Running` at 08:23:04 in the Pod watch), so health was `Progressing` until its readiness probe passed at 08:23:09. A lasting case is provoked in Task 7: setting the backend tag to `1.1` is applied successfully (Synced to the new commit), but the new Pod never becomes ready, and after `progressDeadlineSeconds: 120` the Application reports `Synced` and `Degraded`.
 
 ### Q4 (Task 6)
 _To be written._
