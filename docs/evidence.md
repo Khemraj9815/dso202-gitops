@@ -710,3 +710,90 @@ The restored health check (Listing 4) works: the child's own health (`Missing`, 
 ### 5.8 Screenshot
 
 ![tasktracker-dev resource tree](images/task5-dev-tree.png)
+
+## Task 6
+
+### 6.1 Accounts (step 1, as admin)
+```text
+$ argocd account list            # as admin
+NAME      ENABLED  CAPABILITIES
+admin     true     login
+reviewer  true     login
+
+```
+
+### 6.2 Password set and permission tests (steps 2-3)
+```text
+$ argocd account update-password --account reviewer
+<prompts for the admin password, then the new reviewer password - not recorded>
+
+$ argocd login localhost:8080 --username reviewer --insecure --name reviewer
+CURRENT  NAME            SERVER
+         localhost:8080  localhost:8080
+*        reviewer        localhost:8080
+
+$ argocd --argocd-context reviewer app list
+NAME                        CLUSTER                         NAMESPACE       PROJECT  STATUS  HEALTH   SYNCPOLICY  CONDITIONS  REPO                                              PATH                TARGET
+argocd/tasktracker-dev      https://kubernetes.default.svc  dso202-dev      dso202   Synced  Healthy  Auto-Prune  <none>      https://github.com/Khemraj9815/dso202-gitops.git  charts/tasktracker  main
+argocd/tasktracker-staging  https://kubernetes.default.svc  dso202-staging  dso202   Synced  Healthy  Manual      <none>      https://github.com/Khemraj9815/dso202-gitops.git  charts/tasktracker  v1.0.0
+
+$ argocd --argocd-context reviewer account can-i get applications 'dso202/tasktracker-dev'
+yes
+
+$ argocd --argocd-context reviewer account can-i sync applications 'dso202/tasktracker-dev'
+no
+
+$ argocd --argocd-context reviewer account can-i get logs 'dso202/tasktracker-dev'
+no
+
+$ argocd --argocd-context reviewer proj get platform
+{"level":"fatal","msg":"rpc error: code = PermissionDenied desc = permission denied: projects, get, platform, sub: reviewer, iat: 2026-11-21T02:53:36Z","time":"2026-11-21T08:56:02+06:00"}
+
+$ argocd --argocd-context reviewer app sync tasktracker-dev
+{"level":"fatal","msg":"rpc error: code = PermissionDenied desc = permission denied: applications, sync, dso202/tasktracker-dev, sub: reviewer, iat: 2026-11-21T02:53:36Z","time":"2026-11-21T08:56:03+06:00"}
+
+```
+| Test | Expected | Result |
+|---|---|---|
+| `app list` | only `tasktracker-dev`, `tasktracker-staging` | as expected (no `root`, `sealed-secrets`, `platform-*`) |
+| `can-i get applications` | yes | **yes** |
+| `can-i sync applications` | no | **no** (an actual `app sync` is also refused) |
+| `can-i get logs` | no | **no** |
+| `proj get platform` | denied | **PermissionDenied** |
+
+In a private browser window signed in as `reviewer`, the Sync button was refused and Pod logs were hidden.
+
+### 6.3 Logs rule added by commit, bootstrap layer re-applied (step 4)
+Commit `2e1cfcc` ("Task 6: grant reviewer read access to logs in project dso202") enabled `p, reviewer, logs, get, dso202/*, allow` in `bootstrap/argocd/argocd-rbac-cm-patch.yaml`. The ConfigMap is part of the hand-applied bootstrap layer, so it was re-applied:
+```text
+$ kubectl apply -k bootstrap/argocd --server-side --force-conflicts | grep -E 'configmap/argocd-(rbac-)?cm'
+configmap/argocd-cm serverside-applied
+configmap/argocd-cmd-params-cm serverside-applied
+configmap/argocd-rbac-cm serverside-applied
+
+$ kubectl get configmap argocd-rbac-cm -n argocd -o jsonpath='{.data.policy\.csv}' | grep '^p,'
+p, reviewer, applications, get, dso202/*, allow
+p, reviewer, projects, get, dso202, allow
+p, reviewer, logs, get, dso202/*, allow
+
+$ argocd --argocd-context reviewer account can-i get logs 'dso202/tasktracker-dev'
+yes
+
+$ argocd --argocd-context reviewer account can-i sync applications 'dso202/tasktracker-dev'
+no
+
+# The same permission checked at the API, with the reviewer's session token:
+$ curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <reviewer token>" \
+    "https://localhost:8080/api/v1/applications/tasktracker-dev/logs?namespace=dso202-dev&podName=<backend pod>&container=backend&tailLines=3&follow=false"
+tasktracker-dev logs as reviewer: HTTP 200
+$ curl ... "https://localhost:8080/api/v1/applications/root/logs?tailLines=1&follow=false"
+root logs as reviewer: HTTP 403
+
+$ argocd --argocd-context reviewer app logs root --tail 1
+{"level":"fatal","msg":"stream read failed: rpc error: code = PermissionDenied desc = permission denied","time":"2026-11-21T09:03:17+06:00"}
+```
+Only the logs permission changed: `sync` is still `no`, and logs of Applications outside `dso202` (`root`) are still denied. No API-server restart was needed. The CLI was then returned to the admin context (`argocd context localhost:8080`, step 5).
+
+### 6.4 Screenshot: reviewer session showing Pod logs
+
+![reviewer sees Pod logs](images/task6-reviewer-logs.png)
