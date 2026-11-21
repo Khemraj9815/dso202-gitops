@@ -114,7 +114,20 @@ The sealing-key backup in `../dso202-keys/` is kept: without it, every SealedSec
 At 08:23:04 every manifest had been applied (Synced), but the frontend Pod created in wave 2 was not yet ready (`tasktracker-frontend ... 0/1 Running` at 08:23:04 in the Pod watch), so health was `Progressing` until its readiness probe passed at 08:23:09. A lasting case is provoked in Task 7: setting the backend tag to `1.1` is applied successfully (Synced to the new commit), but the new Pod never becomes ready, and after `progressDeadlineSeconds: 120` the Application reports `Synced` and `Degraded`.
 
 ### Q4 (Task 6)
-_To be written._
+**Argo CD RBAC** controls what a user of *Argo CD* (UI, CLI or API) may do with Argo CD objects: view, sync, delete or override Applications, read Projects, read Pod logs, and so on (`p, reviewer, applications, get, dso202/*, allow`). It is configured in the `argocd-rbac-cm` ConfigMap (`policy.csv`, `policy.default`), here in `bootstrap/argocd/argocd-rbac-cm-patch.yaml`, and its users are declared in `argocd-cm` (`accounts.reviewer: login`). The actions are then carried out by Argo CD's own service accounts, so a `reviewer` never needs any Kubernetes permission.
+
+**Kubernetes RBAC** (Assignment 2) controls what an identity that talks *directly to the Kubernetes API* may do with Kubernetes objects: for example the `dso202-developers` group may `get/list/watch` Pods and logs in `dso202-dev` (`platform/dev/rbac.yaml`). It is configured with Role/ClusterRole and RoleBinding/ClusterRoleBinding objects in the cluster, and it also bounds Argo CD itself (the application controller's ClusterRole is what lets it create objects at all).
+
+The two are independent: `reviewer` can read Pod logs through Argo CD without any Kubernetes RoleBinding, and a member of `dso202-developers` can run `kubectl logs` without any Argo CD account.
+
+**With SSO** (Dex or OIDC connected to the organisation's identity provider), local accounts such as `accounts.reviewer` would be removed, and `policy.csv` would grant permissions to *groups* from the identity provider's token instead of to individual local users, usually through roles:
+```text
+p, role:dso202-reviewer, applications, get, dso202/*, allow
+p, role:dso202-reviewer, projects,     get, dso202,   allow
+p, role:dso202-reviewer, logs,         get, dso202/*, allow
+g, my-org:dso202-reviewers, role:dso202-reviewer
+```
+Membership would then be managed in the identity provider (joining or leaving the group), not in Git, and `scopes` in `argocd-rbac-cm` would name the token claim that carries the groups (by default `[groups]`).
 
 ### Q5 (Task 7)
 _To be written._

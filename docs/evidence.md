@@ -420,6 +420,10 @@ $ git status --short --ignored
 ```
 Every search printed nothing. The only ignored path is `secrets-plain/`.
 
+### 4.6 Screenshot: the controller Application, created by the root from Git
+
+![root and sealed-secrets Applications](images/task4-applications.png)
+
 ## Task 5
 
 ### 5.1 Baseline tag
@@ -539,9 +543,11 @@ $ curl -s -o /dev/null -w 'GET after delete HTTP %{http_code}\n' http://localhos
 GET after delete HTTP 404
 
 ```
-Create (201, id 4) -> read -> update (status `done`) -> delete (204) -> read again (404). The same cycle was also performed in the browser at http://localhost:30080 (screenshot below).
+Create (201, id 4) -> read -> update (status `done`) -> delete (204) -> read again (404). The cycle was also used in the browser at http://localhost:30080: the page reports "Backend + DB online" and task #5 was filed through the UI.
 
-![dev frontend CRUD](images/task5-dev-crud.png)
+![dev frontend](images/task5-dev-frontend.png)
+
+![task created in the dev frontend](images/task5-dev-crud.png)
 
 ### 5.5 Staging: before the first sync
 ```text
