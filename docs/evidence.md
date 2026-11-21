@@ -794,6 +794,105 @@ $ argocd --argocd-context reviewer app logs root --tail 1
 ```
 Only the logs permission changed: `sync` is still `no`, and logs of Applications outside `dso202` (`root`) are still denied. No API-server restart was needed. The CLI was then returned to the admin context (`argocd context localhost:8080`, step 5).
 
-### 6.4 Screenshot: reviewer session showing Pod logs
+### 6.4 Pod logs in the reviewer UI - not shown (known limitation)
+The permission is granted (`can-i get logs` = `yes`, API returns HTTP 200 for `tasktracker-dev` and 403 for `root`), but no Pod logs could be displayed, in the UI or the CLI, for either account. Cause, found while investigating: Argo CD hides resource-tree nodes whose kind the AppProject does not permit, and the `dso202` whitelist (Task 3) lists only `Deployment`, `StatefulSet`, `Service` and `Job`. The ReplicaSets and Pods those controllers create are therefore not in the tree of `tasktracker-dev` (`/api/v1/applications/tasktracker-dev/resource-tree` lists only the four managed kinds), while the same tree for `sealed-secrets` in the unrestricted `platform` project does include `Pod` and `ReplicaSet`. Argo CD serves logs only for Pods in the tree, so there is nothing to show. The fix would be to add `apps/ReplicaSet` and `""/Pod` to the `dso202` whitelist with a comment; it was not applied, to keep the whitelist equal to the kinds the chart renders.
 
-![reviewer sees Pod logs](images/task6-reviewer-logs.png)
+## Task 8
+
+Each drill: prediction (written before anything was run), commands, observation, verdict.
+
+### Predictions
+```text
+Predictions recorded at 2026-11-21 09:45:48 - before any drill was run.
+D1: Scaling tasktracker-backend in dso202-dev to 3 replicas will be reverted to 1 within seconds, because tasktracker-dev has selfHeal: true and Git says replicas: 1.
+D2: Scaling tasktracker-backend in dso202-staging to 3 will NOT be reverted: tasktracker-staging has no automated sync, so it will stay at 3 and be reported OutOfSync, with the diff showing replicas 1 vs 3, until a person runs argocd app sync, which restores 1.
+D3: After prune-drill.yaml is pushed, platform-dev will create the ConfigMap within about a minute; after git rm and push, the ConfigMap will be deleted, because platform-dev has prune: true.
+D4: Adding a ResourceQuota to the chart will make the tasktracker-dev sync fail with a "not permitted in project dso202" error and nothing will be applied, while staging stays Synced because it reads tag v1.0.0, which does not contain the file.
+```
+
+### Drill 1 - Drift in dev is reverted
+**Prediction:** D1 above.
+```text
+$ kubectl get deployment -n dso202-dev
+NAME                   READY   UP-TO-DATE   AVAILABLE   AGE
+tasktracker-backend    1/1     1            1           83m
+tasktracker-frontend   1/1     1            1           83m
+
+$ kubectl scale deployment/tasktracker-backend -n dso202-dev --replicas=3     # at 09:46:08
+deployment.apps/tasktracker-backend scaled
+
+$ kubectl get deployment/tasktracker-backend -n dso202-dev -w     (started before the scale; times prefixed)
+09:46:05 NAME                  READY   UP-TO-DATE   AVAILABLE   AGE
+09:46:05 tasktracker-backend   1/1     1            1           83m
+09:46:08 tasktracker-backend   1/3     1            1           83m
+09:46:08 tasktracker-backend   1/3     1            1           83m
+09:46:08 tasktracker-backend   1/3     1            1           83m
+09:46:09 tasktracker-backend   1/3     3            1           83m
+09:46:14 tasktracker-backend   1/1     3            1           83m
+09:46:14 tasktracker-backend   1/1     3            1           83m
+09:46:14 tasktracker-backend   1/1     3            1           83m
+09:46:14 tasktracker-backend   1/1     1            1           83m
+09:46:44 tasktracker-backend   1/1     1            1           83m
+09:46:44 tasktracker-backend   1/1     1            1           83m
+
+$ argocd app history tasktracker-dev | tail -3
+ID      DATE                           REVISION
+0       2026-11-21 08:23:14 +0600 +06  main (2254d34)
+1       2026-11-21 09:46:23 +0600 +06  main (a637b0e)
+
+$ kubectl get deployment/tasktracker-backend -n dso202-dev
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE
+tasktracker-backend   1/1     1            1           83m
+```
+**Observation:** the scale to 3 at 09:46:08 was undone by 09:46:14 (6 s): `UP-TO-DATE` went 1 -> 3 -> 1 and the extra Pods were removed before they became ready. `argocd app history` gained entry 1 at 09:46:23, the self-heal sync.
+**Verdict:** prediction held. Principle 4 (continuously reconciled): `selfHeal: true` in `argocd/applications/tasktracker-dev.yaml` makes Argo CD re-apply Git (`replicas: 1`) as soon as the live state drifts.
+
+### Drill 2 - Drift in staging is reported, not reverted
+**Prediction:** D2 above.
+```text
+$ kubectl scale deployment/tasktracker-backend -n dso202-staging --replicas=3     # at 09:46:58
+deployment.apps/tasktracker-backend scaled
+
+# 09:48:14 - 75 s later
+$ kubectl get deployment/tasktracker-backend -n dso202-staging
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE
+tasktracker-backend   3/3     3            3           84m
+
+$ argocd app get tasktracker-staging --refresh | sed -n '/Sync Policy/,$p'
+Sync Policy:        Manual
+Sync Status:        OutOfSync from v1.0.0 (c512c45)
+Health Status:      Healthy
+
+GROUP  KIND         NAMESPACE       NAME                    STATUS     HEALTH   HOOK      MESSAGE
+       Service      dso202-staging  tasktracker-database    Synced     Healthy            service/tasktracker-database created
+apps   StatefulSet  dso202-staging  tasktracker-database    Synced     Healthy            statefulset rolling update complete 1 pods at revision tasktracker-database-6b756cf8f4...
+       Service      dso202-staging  tasktracker-backend     Synced     Healthy            service/tasktracker-backend created
+apps   Deployment   dso202-staging  tasktracker-backend     OutOfSync  Healthy            deployment.apps/tasktracker-backend created
+       Service      dso202-staging  tasktracker-frontend    Synced     Healthy            service/tasktracker-frontend created
+apps   Deployment   dso202-staging  tasktracker-frontend    Synced     Healthy            deployment.apps/tasktracker-frontend created
+batch  Job          dso202-staging  tasktracker-smoke-test  Succeeded  Synced   PostSync  Reached expected number of succeeded pods
+
+$ argocd app diff tasktracker-staging
+
+===== apps/Deployment dso202-staging/tasktracker-backend ======
+175c175
+<   replicas: 3
+---
+>   replicas: 1
+
+$ argocd app sync tasktracker-staging --timeout 300 | sed -n '/Sync Status/,/^$/p'
+Sync Status:        Synced to v1.0.0 (c512c45)
+Health Status:      Healthy
+
+
+$ kubectl get deployment/tasktracker-backend -n dso202-staging
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE
+tasktracker-backend   1/1     1            1           84m
+
+$ argocd app get tasktracker-staging | grep -E 'Sync Status|Health Status'
+Sync Status:        Synced to v1.0.0 (c512c45)
+Health Status:      Healthy
+
+```
+**Observation:** 75 s after the change (longer than the 60 s poll + 10 s jitter) staging still ran 3/3. Argo CD detected the drift (`OutOfSync`, only the backend Deployment), and `argocd app diff` showed exactly `replicas: 3` (live) vs `1` (Git). Health stayed `Healthy`, because three working replicas are healthy - the drift is a sync problem, not a health problem. The manual `argocd app sync` restored 1/1.
+**Verdict:** prediction held. `tasktracker-staging` has no `automated` block, so reconciliation still *observes* and reports continuously but only a person *applies* - the same gate that holds back releases.
