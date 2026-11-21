@@ -17,6 +17,9 @@ GitOps delivery of the three-tier Task Tracker (PostgreSQL database, Node.js bac
 | dev | `dso202-dev` | branch `main` | automated, prune, self-heal | http://localhost:30080 | http://localhost:30090 |
 | staging | `dso202-staging` | a Git tag (`v1.x.0`) | manual | port-forward → http://localhost:8081 | port-forward → http://localhost:8091 |
 
+## Status
+Tasks 1-6, 8 and 9 are complete with evidence in `docs/evidence.md`. **Task 7 was not performed**: the `1.1` release images were not published on Docker Hub (only `1.0` exists for the frontend and backend), so tags `v1.1.0` and `v1.2.0` do not exist; staging remains at `v1.0.0`. Rebuild from an empty cluster (Task 9) took about 3 min 45 s to a working dev frontend.
+
 ## Repository layout
 
 ```text
@@ -54,6 +57,15 @@ kind create cluster --name dso202-gitops --config cluster/kind-cluster.yaml
 # 2. Restore the sealing key BEFORE the controller exists, so it does not generate a new one
 kubectl create namespace sealed-secrets
 kubectl apply -f ../dso202-keys/sealing-key.backup.yaml
+
+# (Only if image pulls fail - section 13: load images from the host instead. 'kind load docker-image'
+#  from kind v0.20.0 cannot detect the v1.36 node snapshotter, so import with ctr on each node:)
+#  for img in quay.io/argoproj/argocd:v3.5.6 public.ecr.aws/docker/library/redis:8.2.3-alpine ghcr.io/dexidp/dex:v2.45.1 \
+#             docker.io/bitnami/sealed-secrets-controller:0.40.0 rynorbu11/dso202-{db,backend,frontend}:1.0 busybox:1.37; do
+#    docker pull $img; docker save --platform linux/amd64 $img -o /tmp/img.tar
+#    for n in dso202-gitops-control-plane dso202-gitops-worker; do
+#      docker exec -i $n ctr -n k8s.io images import --platform linux/amd64 --snapshotter overlayfs - < /tmp/img.tar; done
+#  done
 
 # 3. Bootstrap step 1: Argo CD (server-side apply: the ApplicationSet CRD is too large for client-side apply)
 kubectl apply -k bootstrap/argocd --server-side --force-conflicts
@@ -130,7 +142,27 @@ g, my-org:dso202-reviewers, role:dso202-reviewer
 Membership would then be managed in the identity provider (joining or leaving the group), not in Git, and `scopes` in `argocd-rbac-cm` would name the token claim that carries the groups (by default `[groups]`).
 
 ### Q5 (Task 7)
-_To be written._
+_Task 7 could not be run: the `1.1` release images were never published (see `docs/evidence.md`, Task 7). This answer is based on the documented behaviour of Argo CD v3.5._
+
+**Why `argocd app rollback` is refused.** Rollback re-applies an earlier entry of `argocd app history` directly to the cluster, which makes the live state differ from what `main` says. With automated sync and self-heal enabled, the controller would immediately sync `main` again and undo the rollback, so Argo CD refuses the command on any Application with an `automated` sync policy (the documentation states that rollback is not possible when automated sync is enabled); the only way to use it would be to disable automation first, which leaves the cluster deliberately out of step with Git.
+
+**The GitOps equivalent** is to change Git: `git revert <bad-commit>` creates a new commit whose content equals the state before the bad change; once it is merged to `main`, Argo CD pulls it and syncs dev back to the previous image like any other release. Task 8, Drill 4 used exactly this to recover from a commit the project refused (`d6ce000` reverted by `f374da6`). For staging the gate is the tag: it simply keeps pointing at the last good tag, so a bad commit on `main` never reaches it.
+
+**Why revert rather than deleting the commit.** `main` is shared and already pulled by Argo CD and by every clone; rewriting it (`reset --hard` + force-push) breaks everyone's copy and can silently drop other people's later commits. A revert keeps the history complete and append-only (principle 2, versioned and immutable): the bad commit, the moment it was undone and who did it remain visible for the post-incident review, `argocd app history` stays consistent with Git, and the change itself can be reverted again when the fix is ready (fix-forward).
 
 ### Q6 (Task 9)
-_To be written._
+**(a) One repository for chart and environment configuration.**
+Advantages:
+1. *Atomic, simple changes.* A chart change and the values it needs (for example a new backend variable for C2) land in one commit and one pull request, so `main` is never in a state where the chart and its values disagree, and a single `git revert` undoes both.
+2. *One place for everything, easy to rebuild.* Task 9 needed one `git clone`, one URL in every `sourceRepos`, and one history to audit; for a single small team and one application this is much less overhead than coordinating two repositories, their access rights and their versions.
+
+Disadvantages:
+1. *Unrelated changes trigger and mix with each other.* Every commit to `main` (README, evidence, chart, values, Argo CD objects) is a new revision for every Application that follows `main`, and the tag that pins staging also pins the chart *and* all configuration together; it is impossible to promote a config change without also taking whatever chart changes were merged meanwhile. The best-practice split lets the chart be versioned and released independently while config is promoted per environment.
+2. *Access control is all-or-nothing.* Anyone who can change the chart can also change `environments/staging/values.yaml`, the Applications under `argocd/` and the platform layer; in a separate config repository, who may change what is deployed where can be restricted (and reviewed) separately from who may change the application packaging.
+
+**(b) What is not under GitOps control after the rebuild, and how teams usually handle it.**
+- *The bootstrap layer (`bootstrap/argocd`: Argo CD itself and its `argocd-cm` / `argocd-rbac-cm`).* It is in Git but applied by hand, so a change (Task 6, step 4) needs a manual `kubectl apply`; teams usually let Argo CD manage its own installation through an Application ("Argo CD manages Argo CD") after the first install, or install it with Terraform/a cluster-provisioning pipeline.
+- *The root Application and the `platform` AppProject (`bootstrap/root`).* Applied once by hand, so deleting or editing them is not self-healed; teams keep them in Git like here and create them from the same provisioning automation (Terraform, Cluster API, or an ApplicationSet in a management cluster), with tight RBAC on who may touch the `argocd` namespace.
+- *The sealing key.* It exists only in the cluster and in the manual backup in `../dso202-keys/`; teams keep it in a secret manager or KMS (or use an external-secrets operator backed by Vault/AWS Secrets Manager instead of Sealed Secrets) and back it up automatically after every key renewal.
+- *The database contents.* Application data is state, not configuration, so Git cannot hold it and it was lost in the rebuild; teams protect it with scheduled backups and tested restores (for example `pg_dump` CronJobs, Velero volume snapshots, or a managed database service with point-in-time recovery).
+- *(Also outside: the kind cluster itself, the reviewer's password, and the images loaded from the host cache.)* The cluster is created by `cluster/kind-cluster.yaml` but by hand; production teams create clusters with infrastructure-as-code, and keep account passwords in SSO instead of local accounts.
